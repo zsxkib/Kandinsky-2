@@ -1,65 +1,121 @@
+# Prediction interface for Cog ⚙️
+# https://github.com/replicate/cog/blob/main/docs/python.md
+
+import os
 from typing import List
+from diffusers import KandinskyV22Pipeline, KandinskyV22PriorPipeline
+import torch
+from transformers import CLIPVisionModelWithProjection
+from diffusers.models import UNet2DConditionModel
+
 from cog import BasePredictor, Input, Path
-from kandinsky2 import get_kandinsky2
+
+
+MODEL_CACHE = "weights_cache"
 
 
 class Predictor(BasePredictor):
-    def setup(self):
-        self.model = get_kandinsky2(
-            "cuda",
-            task_type="text2img",
-            cache_dir="./kandinsky2-weights",
-            model_version="2.1",
-            use_flash_attention=False,
+    def setup(self) -> None:
+        """Load the model into memory to make running multiple predictions efficient"""
+        device = torch.device("cuda:0")
+
+        self.negative_prior_prompt = "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature"
+        
+        image_encoder = (
+            CLIPVisionModelWithProjection.from_pretrained(
+                "kandinsky-community/kandinsky-2-2-prior",
+                subfolder="image_encoder",
+                cache_dir=MODEL_CACHE,
+            )
+            .half()
+            .to(device)
         )
+        unet = (
+            UNet2DConditionModel.from_pretrained(
+                "kandinsky-community/kandinsky-2-2-decoder",
+                subfolder="unet",
+                cache_dir=MODEL_CACHE,
+            )
+            .half()
+            .to(device)
+        )
+        self.prior = KandinskyV22PriorPipeline.from_pretrained(
+            "kandinsky-community/kandinsky-2-2-prior",
+            image_encoder=image_encoder,
+            torch_dtype=torch.float16,
+            cache_dir=MODEL_CACHE,
+        ).to(device)
+        self.decoder = KandinskyV22Pipeline.from_pretrained(
+            "kandinsky-community/kandinsky-2-2-decoder",
+            unet=unet,
+            torch_dtype=torch.float16,
+            cache_dir=MODEL_CACHE,
+        ).to(device)
 
     def predict(
         self,
-        prompt: str = Input(description="Input Prompt", default="red cat, 4k photo"),
-        num_inference_steps: int = Input(
-            description="Number of denoising steps", ge=1, le=500, default=50
+        prompt: str = Input(
+            description="Input prompt",
+            default="A moss covered astronaut with a black background",
         ),
-        guidance_scale: float = Input(
-            description="Scale for classifier-free guidance", ge=1, le=20, default=4
+        negative_prompt: str = Input(
+            description="Specify things to not see in the output",
+            default=None,
         ),
-        scheduler: str = Input(
-            description="Choose a scheduler",
-            default="p_sampler",
-            choices=["ddim_sampler", "p_sampler", "plms_sampler"],
-        ),
-        prior_cf_scale: int = Input(default=4),
-        prior_steps: str = Input(default="5"),
         width: int = Input(
-            description="Choose width. Lower the setting if out of memory.",
+            description="Width of output image. Lower the setting if hits memory limits.",
+            choices=[256, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024],
             default=512,
-            choices=[256, 288, 432, 512, 576, 768, 1024],
         ),
         height: int = Input(
-            description="Choose height. Lower the setting if out of memory.",
+            description="Height of output image. Lower the setting if hits memory limits.",
+            choices=[256, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024],
             default=512,
-            choices=[256, 288, 432, 512, 576, 768, 1024],
         ),
-        batch_size: int = Input(
-            description="Choose batch size. Lower the setting if out of memory.",
+        num_inference_steps: int = Input(
+            description="Number of denoising steps", ge=1, le=500, default=25
+        ),
+        num_outputs: int = Input(
+            description="Number of images to output.",
+            ge=1,
+            le=4,
             default=1,
-            choices=[1, 2, 3, 4],
+        ),
+        seed: int = Input(
+            description="Random seed. Leave blank to randomize the seed", default=None
         ),
     ) -> List[Path]:
-        images = self.model.generate_text2img(
-            prompt,
-            num_steps=num_inference_steps,
-            batch_size=batch_size,
-            guidance_scale=guidance_scale,
-            h=height,
-            w=width,
-            sampler=scheduler,
-            prior_cf_scale=prior_cf_scale,
-            prior_steps=prior_steps,
+        """Run a single prediction on the model"""
+        if seed is None:
+            seed = int.from_bytes(os.urandom(2), "big")
+        print(f"Using seed: {seed}")
+
+        if negative_prompt is not None:
+            negative_prior_prompt = negative_prompt + self.negative_prior_prompt
+        else:
+            negative_prior_prompt = self.negative_prior_prompt
+
+        img_emb = self.prior(
+            prompt=prompt, num_inference_steps=25, num_images_per_prompt=num_outputs
         )
-        output = []
-        for i, im in enumerate(images):
-            out = f"/tmp/out_{i}.png"
-            im.save(out)
-            im.save(f"out_{i}.png")
-            output.append(Path(out))
-        return output
+
+        negative_emb = self.prior(
+            prompt=negative_prior_prompt,
+            num_inference_steps=25,
+            num_images_per_prompt=num_outputs,
+        )
+        output = self.decoder(
+            image_embeds=img_emb.image_embeds,
+            negative_image_embeds=negative_emb.image_embeds,
+            num_inference_steps=num_inference_steps,
+            height=height,
+            width=width,
+        )
+
+        output_paths = []
+        for i, sample in enumerate(output.images):
+            output_path = f"/tmp/out-{i}.png"
+            sample.save(output_path)
+            output_paths.append(Path(output_path))
+
+        return output_paths
