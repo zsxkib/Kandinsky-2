@@ -20,7 +20,7 @@ class Predictor(BasePredictor):
         device = torch.device("cuda:0")
 
         self.negative_prior_prompt = "lowres, text, error, cropped, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, username, watermark, signature"
-        
+
         image_encoder = (
             CLIPVisionModelWithProjection.from_pretrained(
                 "kandinsky-community/kandinsky-2-2-prior",
@@ -64,16 +64,47 @@ class Predictor(BasePredictor):
         ),
         width: int = Input(
             description="Width of output image. Lower the setting if hits memory limits.",
-            choices=[256, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024],
+            choices=[
+                384,
+                512,
+                576,
+                640,
+                704,
+                768,
+                960,
+                1024,
+                1152,
+                1280,
+                1536,
+                1792,
+                2048,
+            ],
             default=512,
         ),
         height: int = Input(
             description="Height of output image. Lower the setting if hits memory limits.",
-            choices=[256, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024],
+            choices=[
+                384,
+                512,
+                576,
+                640,
+                704,
+                768,
+                960,
+                1024,
+                1152,
+                1280,
+                1536,
+                1792,
+                2048,
+            ],
             default=512,
         ),
         num_inference_steps: int = Input(
-            description="Number of denoising steps", ge=1, le=500, default=25
+            description="Number of denoising steps", ge=1, le=500, default=75
+        ),
+        num_inference_steps_prior: int = Input(
+            description="Number of denoising steps for priors", ge=1, le=500, default=25
         ),
         num_outputs: int = Input(
             description="Number of images to output.",
@@ -89,6 +120,7 @@ class Predictor(BasePredictor):
         if seed is None:
             seed = int.from_bytes(os.urandom(2), "big")
         print(f"Using seed: {seed}")
+        torch.manual_seed(seed)
 
         if negative_prompt is not None:
             negative_prior_prompt = negative_prompt + self.negative_prior_prompt
@@ -96,12 +128,14 @@ class Predictor(BasePredictor):
             negative_prior_prompt = self.negative_prior_prompt
 
         img_emb = self.prior(
-            prompt=prompt, num_inference_steps=25, num_images_per_prompt=num_outputs
+            prompt=prompt,
+            num_inference_steps=num_inference_steps_prior,
+            num_images_per_prompt=num_outputs,
         )
 
         negative_emb = self.prior(
             prompt=negative_prior_prompt,
-            num_inference_steps=25,
+            num_inference_steps=num_inference_steps_prior,
             num_images_per_prompt=num_outputs,
         )
         output = self.decoder(
