@@ -62,7 +62,7 @@ class Kandinsky2_1:
             self.text_encoder = self.text_encoder.half()
 
         self.clip_model, self.preprocess = clip.load(
-            config["clip_name"], device=self.device, jit=False
+            config["clip_name"], device=self.device, jit=False, download_root=config["cache_dir"],
         )
         self.clip_model.eval()
 

@@ -1,5 +1,24 @@
 # Custom
 .DS_Store
+weights_cache/
+.cog/
+*.mp4
+*.pth
+*.pt
+*.bin
+*.ckpt
+*.onnx
+*.tar
+*.tar.gz
+*.h5
+*.pb
+*.caffemodel
+*.weights
+*.jpg
+*.jpeg
+*.png
+*.webp
+.vscode
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
