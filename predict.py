@@ -2,9 +2,10 @@
 # https://github.com/replicate/cog/blob/main/docs/python.md
 
 import os
-import subprocess
 import time
 import torch
+import mimetypes
+import subprocess
 from typing import List
 from cog import BasePredictor, Input, Path
 
@@ -13,7 +14,6 @@ from kandinsky2.configs import CONFIG_2_1
 from omegaconf.dictconfig import DictConfig
 from copy import deepcopy
 
-
 MODEL_CACHE = "weights_cache"
 MODEL_URL = "https://weights.replicate.delivery/default/kandinsky-2-1/2_1.tar"
 VIT_L_14_URL = "https://weights.replicate.delivery/default/kandinsky-2-1/ViT-L-14.pt"
@@ -21,6 +21,9 @@ VIT_L_14_URL = "https://weights.replicate.delivery/default/kandinsky-2-1/ViT-L-1
 os.environ["HF_DATASETS_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_CACHE"] = MODEL_CACHE
+
+mimetypes.add_type("image/webp", ".webp")
+
 
 def download_weights(url, dest):
     start = time.time()
@@ -37,12 +40,11 @@ def download_weights(url, dest):
         )
         raise
     print("[+] Download completed in: ", time.time() - start, "seconds")
-    
+
+
 class Predictor(BasePredictor):
     def setup(self):
-        model_path = os.path.join(
-            MODEL_CACHE, "2_1"
-        )
+        model_path = os.path.join(MODEL_CACHE, "2_1")
         if not os.path.exists(model_path):
             download_weights(MODEL_URL, model_path)
 
@@ -109,9 +111,15 @@ class Predictor(BasePredictor):
             description="Random seed. Leave blank to randomize the seed", default=None
         ),
         output_format: str = Input(
-            description="Output image format",
-            choices=["webp", "jpeg", "png"],
+            description="Format of the output images",
+            choices=["webp", "jpg", "png"],
             default="webp",
+        ),
+        output_quality: int = Input(
+            description="Quality of the output images, from 0 to 100. 100 is best quality, 0 is lowest quality.",
+            default=80,
+            ge=0,
+            le=100,
         ),
     ) -> List[Path]:
         if seed is None:
@@ -131,10 +139,19 @@ class Predictor(BasePredictor):
             prior_steps=prior_steps,
         )
         output_paths = []
-        for i, sample in enumerate(output):
-            output_path = f"/tmp/out-{i}.{output_format}"
-            sample.save(output_path)
-            output_paths.append(Path(output_path))
+        for index, sample in enumerate(output):
+            extension = output_format.lower()
+            extension = "jpeg" if extension == "jpg" else extension
+            output_filename = f"/tmp/out-{index}.{extension}"
+
+            print(f"Saving to {output_filename}...")
+
+            save_params = {"format": extension.upper()}
+            if output_format != "png":
+                save_params["quality"] = output_quality
+                save_params["optimize"] = True
+
+            sample.save(output_filename, **save_params)
+            output_paths.append(Path(output_filename))
 
         return output_paths
- 
